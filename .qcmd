@@ -1,0 +1,5 @@
+touch a.bck b.bak c.tmp e.swp ␍
+zig run clnup.zig -- -dry-run ␍
+zig run clnup.zig ␍
+git commit -a && git push && git deploy
+zig build-exe clnup.zig -O ReleaseFast -target native -dynamic
