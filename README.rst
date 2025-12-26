@@ -1,142 +1,140 @@
 clnup
 =====
 
-``clnup`` is a file cleanup utility written in `Zig <https://ziglang.org/>`_.
-It reads a ``.clnup`` configuration file containing simple path-matching rules,
-then recursively walks the current working directory to apply actions such
-as printing, deleting, or touching matched files.
-
-This tool is useful for scripted cleanups, build directories, or project maintenance tasks where
-fine-grained pattern control is needed.
+``clnup`` is a directory cleanup tool written in `Zig <https://ziglang.org/>`_.
+It applies user-defined cleanup rules from a ``.clnup`` file, optionally recursively traversing directories.
+It can print, delete, or touch files matching the provided patterns.
 
 Features
 --------
 
-- Reads cleanup rules from a ``.clnup`` file.
-- Supports simple glob-style patterns (``*`` and ``?``).
-- Pattern modifiers for negation, directory-only, and anchoring.
-- Runtime-selectable actions:
-
-  - ``print``: Display matching paths (dry-run mode).
-  - ``delete``: Recursively delete matching files or directories.
-  - ``touch``: Ensure matching files exist.
-
-- Works entirely within the current working directory—safe by design.
+- Reads glob-style cleanup rules from a config file (default: ``.clnup``).
+- Works recursively or non-recursively, depending on flags.
+- Provides quiet and verbose output control.
+- Simple built-in ``fnmatch`` implementation for pattern matching.
+- Safe by default—no destructive action without explicit flags.
 
 Usage
 -----
 
 .. code-block:: bash
 
-   clnup -file <path/to/.clnup> [-action=print|delete|touch] [-dry-run]
+   clnup [options] [path]
+
+The optional *path* argument defaults to the current directory (``.``).
 
 Options
-~~~~~~~
+-------
 
-- ``-file``: Path to the cleanup rules file (default: ``.clnup``).
-- ``-action``: Operation to perform:
+- ``-r``
+  Recurse into subdirectories. By default, only the top level is processed.
 
-  - ``print`` — show matching paths only.
-  - ``delete`` — remove matching paths.
-  - ``touch`` — ensure file exists (creates if missing).
+- ``-f <path>``
+  Specify the location of the rules file. Defaults to ``.clnup`` in the current directory.
+  You can also use a global rules file, e.g. ``-f $HOME/.clnup``.
 
-- ``-dry-run``: Shortcut for performing a print-only run.
+- ``-a <action>``
+  Perform an action:
+  - ``print`` — display paths matched by rules (default if dry-run).
+  - ``delete`` — remove files matching rules.
+  - ``touch`` — ensure files exist (creates missing ones).
 
-Example
-~~~~~~~
+- ``-q``
+  Quiet mode. Suppresses non-error output.
+
+- ``-v``
+  Verbose mode. Prints diagnostic details about rule evaluation and matched files.
+
+- ``--dry-run``
+  Print matches but perform no modification (alias for ``-a print``).
+
+Examples
+--------
 
 .. code-block:: bash
 
-   # Print matches without deleting
-   clnup -file .clnup -dry-run
+   # Print matched files (dry-run)
+   clnup -r
 
-   # Actually delete matched files
-   clnup -file .clnup -action delete
+   # Delete recursively using project local config
+   clnup -r -a delete
 
-   # Create missing files matching rules
-   clnup -file .clnup -action touch
+   # Use global rules file from home directory
+   clnup -r -f $HOME/.clnup
+
+   # Verbose recursive run on custom directory
+   clnup -r -v ../build/tmp/a/b
+
+   # Quiet cleanup on current working directory
+   clnup -q -a delete
 
 The .clnup Specification
 ------------------------
 
-Each line in the ``.clnup`` file defines a **rule**.
-Rules are evaluated from top to bottom.
+Each line in the ``.clnup`` file defines one rule.
 
-Each rule may specify:
-
-- ``!`` — Negate the rule (keep instead of delete).
-- ``/`` — Anchor the pattern to the repository root.
-- Trailing ``/`` — Match directories only.
-- ``#`` — Denote a comment line.
-
-Blank lines and lines starting with ``#`` are ignored.
-
-Patterns support simple globbing:
-
-- ``*`` — matches zero or more characters.
-- ``?`` — matches exactly one character.
-
-Rules Syntax
-~~~~~~~~~~~~
+Syntax
+~~~~~~
 
 .. code-block::
 
    [!] [/]<pattern>[/]
 
-Examples:
+Meaning:
+
+- ``!`` — Negate a rule (keep instead of delete).
+- ``/`` — Anchor pattern to the top directory.
+- Trailing ``/`` — Apply to directories only.
+- Lines starting with ``#`` — Comments (ignored).
+- Blank lines are ignored.
+
+Matching semantics:
+
+- ``*`` — matches zero or more characters.
+- ``?`` — matches exactly one character.
+- Rules are applied in order; the **last matching rule wins**.
+
+Example
+~~~~~~~
 
 .. code-block:: text
 
-   # Ignore all files ending in .log
-   *.log
-
-   # Only match directories named build/
-   build/
-
-   # Match anchored path "out/tmp"
-   /out/tmp
-
-   # Keep one directory intact
-   !/out/cache/
-
-Rule Evaluation
----------------
-
-Rules are applied sequentially as the directory tree is traversed:
-
-1. Each rule is checked in order.
-2. If a file or directory matches:
-   - The most recent matching rule determines whether it is *kept* or *deleted*.
-   - ``!`` negates a deletion rule (forces keep).
-3. Directory-only rules (ending with ``/``) apply only to directories.
-
-The last matching rule wins.
-
-Implementation Overview
------------------------
-
-- Written in Zig, using ``std.fs`` for filesystem access.
-- Allocates dynamically for rule parsing via ``GeneralPurposeAllocator``.
-- Uses a simple recursive directory walker.
-- Simple glob matching implemented manually (``fnmatch`` equivalent for ``*`` and ``?``).
-- Supports function-pointer-dispatched handlers for ``print``, ``delete``, ``touch``.
-
-Example .clnup File
--------------------
-
-.. code-block:: text
-
-   # Delete all build outputs
+   # Delete all build directories
    build/
 
    # Delete all log files
    *.log
 
-   # But keep the persistent cache
+   # But keep this cache
    !/build/cache/
 
-   # Delete temporary files anywhere
+   # Ignore editor swap files
    *~
+
+
+Verbose Example
+---------------
+
+When running in verbose mode (``-v``), ``clnup`` prints details about rule evaluation:
+
+.. code-block:: text
+
+   [match] build/  (rule: "build/")
+   [skip]  build/cache/  (rule: "!/build/cache/")
+
+This helps verify which rule matched a file before applying destructive actions.
+
+
+Quiet Mode
+----------
+
+When ``-q`` is used, only errors are printed — ideal for automated scripts.
+
+Example:
+
+.. code-block:: bash
+
+   clnup -r -q -a delete
 
 
 Building
@@ -146,11 +144,12 @@ Building
 
    zig build-exe clnup.zig -O ReleaseSafe
 
-   # or run directly with zig
-   zig run clnup.zig -- -file .clnup -dry-run
+   # or
+   zig run clnup.zig -- -r -a print
+
 
 License
 -------
 
-MIT License (or specify your own).
-This project is open source and uses no external dependencies.
+MIT License (or your chosen license).
+No external dependencies.

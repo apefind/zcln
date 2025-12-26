@@ -1,4 +1,4 @@
-touch a.bck b.bak c.tmp e.swp ␍
+mkdir -p a/b/c; touch a.bck b.bak c.tmp e.swp a/b/c/x.log␍
 zig run clnup.zig -- -dry-run ␍
 zig run clnup.zig ␍
 git commit -a && git push && git deploy
