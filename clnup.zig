@@ -43,6 +43,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const state = try parseArgs(allocator);
+    defer {
+        if (!std.mem.eql(u8, state.clnup_path, ".clnup"))
+            allocator.free(state.clnup_path);
+        if (!std.mem.eql(u8, state.root, "."))
+            allocator.free(state.root);
+    }
 
     if (state.verbose) {
         std.debug.print("Using rules from: {s}\n", .{state.clnup_path});
@@ -79,7 +85,7 @@ fn parseArgs(alloc: std.mem.Allocator) !ActionState {
     var args = try std.process.argsWithAllocator(alloc);
     defer args.deinit();
 
-    _ = args.next(); // skip executable name
+    _ = args.next();
 
     var recursive = false;
     var quiet = false;
@@ -98,11 +104,12 @@ fn parseArgs(alloc: std.mem.Allocator) !ActionState {
         } else if (std.mem.eql(u8, arg, "-d")) {
             dry_run = true;
         } else if (std.mem.eql(u8, arg, "-f")) {
-            clnup_path = args.next() orelse usage();
+            const p = args.next() orelse usage();
+            clnup_path = try alloc.dupe(u8, p);
         } else if (std.mem.startsWith(u8, arg, "-")) {
             usage();
         } else {
-            root = arg;
+            root = try alloc.dupe(u8, arg);
         }
     }
 
