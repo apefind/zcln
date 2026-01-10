@@ -3,4 +3,4 @@ zig run clnup.zig -- -d -r ␍
 zig run clnup.zig -- -d -r -v ␍
 zig run clnup.zig -- -r ␍
 git commit -a && git push && git deploy
-zig build-exe clnup.zig -O ReleaseFast -target native -dynamic && mv clnup ~/u/work/bin
+zig build-exe clnup.zig -O ReleaseFast -target native -dynamic && mv clnup ~/u/work/bin/zclnup
