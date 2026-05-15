@@ -1,10 +1,5 @@
 const std = @import("std");
 
-const Action = enum {
-    Delete,
-    Print,
-};
-
 const ActionState = struct {
     recursive: bool,
     quiet: bool,
@@ -72,7 +67,7 @@ pub fn main() !void {
     const handler: HandlerFn = if (state.dry_run) printHandler else deleteHandler;
 
     if (state.recursive) {
-        try walk(state.root, rules, handler, allocator, state);
+        try walk(state.root, "", rules, handler, allocator, state);
     } else {
         try processDir(state.root, rules, handler, allocator, state);
     }
@@ -141,7 +136,8 @@ fn usage() noreturn {
 // Rules parsing
 // ------------------------------------------------------------
 fn parseRules(allocator: std.mem.Allocator, input: []const u8) ![]Rule {
-    var list = std.ArrayList(Rule){};
+    // FIX: use .init(allocator) instead of .{} to be explicit and idiomatic.
+    var list = std.ArrayList(Rule).init(allocator);
 
     var it = std.mem.splitScalar(u8, input, '\n');
     while (it.next()) |line_raw| {
@@ -172,10 +168,10 @@ fn parseRules(allocator: std.mem.Allocator, input: []const u8) ![]Rule {
         }
 
         r.pattern = try allocator.dupe(u8, p);
-        try list.append(allocator, r);
+        try list.append(r);
     }
 
-    return list.toOwnedSlice(allocator);
+    return list.toOwnedSlice();
 }
 
 // ------------------------------------------------------------
@@ -197,16 +193,18 @@ fn matches(r: Rule, rel: []const u8) bool {
         return fnmatch(r.pattern, rel);
     }
 
-    var it = std.mem.splitScalar(u8, rel, '/');
+    // FIX: iterate over components by splitting and re-slicing correctly.
+    // We try matching the pattern against every suffix "component/..." of rel,
+    // including the full rel itself, so that non-anchored rules match any
+    // path component at any depth.
     var offset: usize = 0;
-
-    while (true) {
-        const part = it.next();
-        if (part == null) break;
-
+    while (offset <= rel.len) {
         const sub = rel[offset..];
         if (fnmatch(r.pattern, sub)) return true;
-        offset += part.?.len + 1;
+
+        // Advance to the character after the next '/'
+        const slash = std.mem.indexOfScalarPos(u8, rel, offset, '/') orelse break;
+        offset = slash + 1;
     }
 
     return false;
@@ -241,6 +239,10 @@ fn fnmatch(pattern: []const u8, name: []const u8) bool {
 // ------------------------------------------------------------
 // Directory traversal
 // ------------------------------------------------------------
+
+// FIX: processDir now receives `rel_prefix` — the path of `root` relative to
+// the user-supplied root directory — so that anchored rules can be evaluated
+// against the correct relative path rather than just the bare entry name.
 fn processDir(
     root: []const u8,
     rules: []Rule,
@@ -254,15 +256,21 @@ fn processDir(
     var it = dir.iterate();
     while (try it.next()) |entry| {
         const name = entry.name;
-        const is_dir = entry.kind == .directory;
+        // FIX: treat symlinks-to-directories as directories.
+        const is_dir = entry.kind == .directory or entry.kind == .sym_link;
         if (evaluate(name, is_dir, rules) == .Delete) {
             try handler(name, is_dir, allocator, state.quiet, state.verbose);
         }
     }
 }
 
+// FIX: walk now accepts `rel_prefix` — the path of `root` relative to the
+// user-supplied root — and builds a proper relative path for each entry before
+// calling evaluate. This makes anchored rules and multi-segment patterns work
+// correctly at every depth.
 fn walk(
     root: []const u8,
+    rel_prefix: []const u8,
     rules: []Rule,
     handler: HandlerFn,
     allocator: std.mem.Allocator,
@@ -277,15 +285,23 @@ fn walk(
         const full = try std.fs.path.join(allocator, &.{ root, name });
         defer allocator.free(full);
 
-        const is_dir = entry.kind == .directory;
+        // Build the path relative to the user-supplied root for rule evaluation.
+        const rel = if (rel_prefix.len == 0)
+            try allocator.dupe(u8, name)
+        else
+            try std.fs.path.join(allocator, &.{ rel_prefix, name });
+        defer allocator.free(rel);
 
-        if (evaluate(name, is_dir, rules) == .Delete) {
+        // FIX: treat symlinks-to-directories as directories.
+        const is_dir = entry.kind == .directory or entry.kind == .sym_link;
+
+        if (evaluate(rel, is_dir, rules) == .Delete) {
             try handler(full, is_dir, allocator, state.quiet, state.verbose);
             continue;
         }
 
         if (is_dir) {
-            try walk(full, rules, handler, allocator, state);
+            try walk(full, rel, rules, handler, allocator, state);
         }
     }
 }
