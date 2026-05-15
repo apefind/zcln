@@ -32,12 +32,12 @@ const HandlerFn = *const fn (
 // ------------------------------------------------------------
 // Entry point
 // ------------------------------------------------------------
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const state = try parseArgs(allocator);
+    const state = try parseArgs(allocator, init.args);
     defer {
         if (!std.mem.eql(u8, state.clnup_path, ".clnup"))
             allocator.free(state.clnup_path);
@@ -76,8 +76,8 @@ pub fn main() !void {
 // ------------------------------------------------------------
 // CLI parsing
 // ------------------------------------------------------------
-fn parseArgs(alloc: std.mem.Allocator) !ActionState {
-    var args = try std.process.argsWithAllocator(alloc);
+fn parseArgs(alloc: std.mem.Allocator, process_args: std.process.Args) !ActionState {
+    var args = try process_args.iterateAllocator(alloc);
     defer args.deinit();
 
     _ = args.next();
