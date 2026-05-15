@@ -24,6 +24,7 @@ const Rule = struct {
 const HandlerFn = *const fn (
     path: []const u8,
     is_dir: bool,
+    io: std.Io,
     allocator: std.mem.Allocator,
     quiet: bool,
     verbose: bool,
@@ -32,12 +33,13 @@ const HandlerFn = *const fn (
 // ------------------------------------------------------------
 // Entry point
 // ------------------------------------------------------------
-pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    // Init.gpa is a ready-made general-purpose allocator; no need to
+    // create our own DebugAllocator here.
+    const allocator = init.gpa;
+    const io = init.io;
 
-    const state = try parseArgs(allocator, init.args);
+    const state = try parseArgs(allocator, init.minimal.args);
     defer {
         if (!std.mem.eql(u8, state.clnup_path, ".clnup"))
             allocator.free(state.clnup_path);
@@ -51,11 +53,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
         std.debug.print("Action: {s}\n", .{if (state.dry_run) "dry run (print)" else "delete"});
         if (state.recursive)
             std.debug.print("Recursion: enabled\n", .{});
-        if (state.verbose)
-            std.debug.print("Verbose: enabled\n", .{});
     }
 
-    const data = try std.fs.cwd().readFileAlloc(allocator, state.clnup_path, 1 << 20);
+    // 0.16: readFileAlloc moved to std.Io.Dir; every fs call takes `io`.
+    const cwd = std.Io.Dir.cwd();
+    const data = try cwd.readFileAlloc(io, allocator, state.clnup_path, 1 << 20);
     defer allocator.free(data);
 
     const rules = try parseRules(allocator, data);
@@ -67,9 +69,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const handler: HandlerFn = if (state.dry_run) printHandler else deleteHandler;
 
     if (state.recursive) {
-        try walk(state.root, "", rules, handler, allocator, state);
+        try walk(state.root, "", rules, handler, io, allocator, state);
     } else {
-        try processDir(state.root, rules, handler, allocator, state);
+        try processDir(state.root, rules, handler, io, allocator, state);
     }
 }
 
@@ -80,7 +82,7 @@ fn parseArgs(alloc: std.mem.Allocator, process_args: std.process.Args) !ActionSt
     var args = try process_args.iterateAllocator(alloc);
     defer args.deinit();
 
-    _ = args.next();
+    _ = args.next(); // skip executable name
 
     var recursive = false;
     var quiet = false;
@@ -136,7 +138,6 @@ fn usage() noreturn {
 // Rules parsing
 // ------------------------------------------------------------
 fn parseRules(allocator: std.mem.Allocator, input: []const u8) ![]Rule {
-    // FIX: use .init(allocator) instead of .{} to be explicit and idiomatic.
     var list = std.ArrayList(Rule).init(allocator);
 
     var it = std.mem.splitScalar(u8, input, '\n');
@@ -193,16 +194,13 @@ fn matches(r: Rule, rel: []const u8) bool {
         return fnmatch(r.pattern, rel);
     }
 
-    // FIX: iterate over components by splitting and re-slicing correctly.
-    // We try matching the pattern against every suffix "component/..." of rel,
-    // including the full rel itself, so that non-anchored rules match any
-    // path component at any depth.
+    // Try matching the pattern against every suffix of `rel` starting at a
+    // component boundary, so that non-anchored rules match at any depth.
     var offset: usize = 0;
     while (offset <= rel.len) {
         const sub = rel[offset..];
         if (fnmatch(r.pattern, sub)) return true;
 
-        // Advance to the character after the next '/'
         const slash = std.mem.indexOfScalarPos(u8, rel, offset, '/') orelse break;
         offset = slash + 1;
     }
@@ -239,48 +237,42 @@ fn fnmatch(pattern: []const u8, name: []const u8) bool {
 // ------------------------------------------------------------
 // Directory traversal
 // ------------------------------------------------------------
-
-// FIX: processDir now receives `rel_prefix` — the path of `root` relative to
-// the user-supplied root directory — so that anchored rules can be evaluated
-// against the correct relative path rather than just the bare entry name.
 fn processDir(
     root: []const u8,
     rules: []Rule,
     handler: HandlerFn,
+    io: std.Io,
     allocator: std.mem.Allocator,
     state: ActionState,
 ) !void {
-    var dir = try std.fs.cwd().openDir(root, .{ .iterate = true });
-    defer dir.close();
+    // 0.16: open via std.Io.Dir.cwd(); every Dir method takes `io`.
+    var dir = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         const name = entry.name;
-        // FIX: treat symlinks-to-directories as directories.
         const is_dir = entry.kind == .directory or entry.kind == .sym_link;
         if (evaluate(name, is_dir, rules) == .Delete) {
-            try handler(name, is_dir, allocator, state.quiet, state.verbose);
+            try handler(name, is_dir, io, allocator, state.quiet, state.verbose);
         }
     }
 }
 
-// FIX: walk now accepts `rel_prefix` — the path of `root` relative to the
-// user-supplied root — and builds a proper relative path for each entry before
-// calling evaluate. This makes anchored rules and multi-segment patterns work
-// correctly at every depth.
 fn walk(
     root: []const u8,
     rel_prefix: []const u8,
     rules: []Rule,
     handler: HandlerFn,
+    io: std.Io,
     allocator: std.mem.Allocator,
     state: ActionState,
 ) !void {
-    var dir = try std.fs.cwd().openDir(root, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true });
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         const name = entry.name;
         const full = try std.fs.path.join(allocator, &.{ root, name });
         defer allocator.free(full);
@@ -292,16 +284,15 @@ fn walk(
             try std.fs.path.join(allocator, &.{ rel_prefix, name });
         defer allocator.free(rel);
 
-        // FIX: treat symlinks-to-directories as directories.
         const is_dir = entry.kind == .directory or entry.kind == .sym_link;
 
         if (evaluate(rel, is_dir, rules) == .Delete) {
-            try handler(full, is_dir, allocator, state.quiet, state.verbose);
+            try handler(full, is_dir, io, allocator, state.quiet, state.verbose);
             continue;
         }
 
         if (is_dir) {
-            try walk(full, rel, rules, handler, allocator, state);
+            try walk(full, rel, rules, handler, io, allocator, state);
         }
     }
 }
@@ -309,7 +300,14 @@ fn walk(
 // ------------------------------------------------------------
 // Handlers
 // ------------------------------------------------------------
-fn printHandler(path: []const u8, _: bool, _: std.mem.Allocator, quiet: bool, verbose: bool) !void {
+fn printHandler(
+    path: []const u8,
+    _: bool,
+    _: std.Io,
+    _: std.mem.Allocator,
+    quiet: bool,
+    verbose: bool,
+) !void {
     if (quiet) return;
     if (verbose)
         std.debug.print("[dry-run] {s}\n", .{path})
@@ -317,7 +315,14 @@ fn printHandler(path: []const u8, _: bool, _: std.mem.Allocator, quiet: bool, ve
         std.debug.print("{s}\n", .{path});
 }
 
-fn deleteHandler(path: []const u8, is_dir: bool, _: std.mem.Allocator, quiet: bool, verbose: bool) !void {
+fn deleteHandler(
+    path: []const u8,
+    is_dir: bool,
+    io: std.Io,
+    _: std.mem.Allocator,
+    quiet: bool,
+    verbose: bool,
+) !void {
     if (!quiet) {
         if (verbose)
             std.debug.print("[delete] {s}\n", .{path})
@@ -325,8 +330,9 @@ fn deleteHandler(path: []const u8, is_dir: bool, _: std.mem.Allocator, quiet: bo
             std.debug.print("{s}\n", .{path});
     }
 
+    const cwd = std.Io.Dir.cwd();
     if (is_dir)
-        try std.fs.cwd().deleteTree(path)
+        try cwd.deleteTree(io, path)
     else
-        try std.fs.cwd().deleteFile(path);
+        try cwd.deleteFile(io, path);
 }
