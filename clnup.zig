@@ -55,9 +55,8 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("Recursion: enabled\n", .{});
     }
 
-    // 0.16: readFileAlloc moved to std.Io.Dir; every fs call takes `io`.
-    const cwd = std.Io.Dir.cwd();
-    const data = try cwd.readFileAlloc(io, state.clnup_path, allocator, 1 << 20);
+    // readFileAlloc lives on std.fs.Dir in 0.16; limit is Io.Limit, not usize.
+    const data = try std.fs.cwd().readFileAlloc(allocator, state.clnup_path, .unlimited);
     defer allocator.free(data);
 
     const rules = try parseRules(allocator, data);
