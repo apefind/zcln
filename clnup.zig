@@ -57,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
 
     // 0.16: readFileAlloc moved to std.Io.Dir; every fs call takes `io`.
     const cwd = std.Io.Dir.cwd();
-    const data = try cwd.readFileAlloc(io, allocator, state.clnup_path, 1 << 20);
+    const data = try cwd.readFileAlloc(io, state.clnup_path, allocator, 1 << 20);
     defer allocator.free(data);
 
     const rules = try parseRules(allocator, data);
