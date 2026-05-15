@@ -137,7 +137,7 @@ fn usage() noreturn {
 // Rules parsing
 // ------------------------------------------------------------
 fn parseRules(allocator: std.mem.Allocator, input: []const u8) ![]Rule {
-    var list = std.ArrayList(Rule).init(allocator);
+    var list: std.ArrayList(Rule) = .empty;
 
     var it = std.mem.splitScalar(u8, input, '\n');
     while (it.next()) |line_raw| {
@@ -168,10 +168,10 @@ fn parseRules(allocator: std.mem.Allocator, input: []const u8) ![]Rule {
         }
 
         r.pattern = try allocator.dupe(u8, p);
-        try list.append(r);
+        try list.append(allocator, r);
     }
 
-    return list.toOwnedSlice();
+    return list.toOwnedSlice(allocator);
 }
 
 // ------------------------------------------------------------
