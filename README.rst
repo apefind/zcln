@@ -1,176 +1,95 @@
 clnup
 =====
 
-``clnup`` is a directory cleanup tool written in `Zig <https://ziglang.org/>`_.
-It reads pattern-based cleanup rules from a ``.clnup`` file and deletes matching files or directories by default.
-A dry-run mode is available to preview which items would be deleted.
+A small Zig command-line tool that deletes (or dry-run lists) files and directories matched by rules
+in a ``.clnup`` file — similar in spirit to ``.gitignore``, but for cleanup instead of exclusion.
 
-Features
---------
-
-- Default action: **delete** files and directories matched by rules.
-- **Dry-run mode** (``-d``) prints matches without deleting them.
-- Supports simple globbing (``*``, ``?``).
-- Handles negated rules (``!pattern``), directory-only matches, and anchored patterns.
-- Recursively traverses directories with the ``-r`` option.
-- Safe-by-design: prints rules and paths before deleting (unless quiet).
+Requires **Zig 0.16**.
 
 Usage
 -----
 
-.. code-block:: bash
-
-   clnup [options] [path]
-
-The optional *path* argument defaults to the current directory (``.``).
-
-Options
--------
-
-- ``-r``
-  Recurse into subdirectories. Non-recursive by default.
-
-- ``-f <file>``
-  Specify a rules file path. Defaults to ``.clnup``.
-
-- ``-q``
-  Quiet mode — suppress all normal output.
-
-- ``-v``
-  Verbose mode — print rule evaluation details and actions.
-
-- ``-d``
-  Dry run. Only print matched paths; do not delete files or directories.
-
-Examples
---------
-
-.. code-block:: bash
-
-   # Dry-run: list what would be deleted
-   clnup -r -d
-
-   # Delete recursively using the default .clnup file
-   clnup -r
-
-   # Use a global cleanup file
-   clnup -f $HOME/.clnup -r
-
-   # Run quietly but still perform deletions
-   clnup -q -r
-
-   # Verbose dry-run on a nested directory
-   clnup -r -v -d ../build/tmp/a/b
-
-The .clnup Specification
-------------------------
-
-Each line in a ``.clnup`` file defines a **rule**.
-
-Rules determine which files are removed (or matched in dry-run mode).
-
-Syntax
-~~~~~~
-
-.. code-block::
-
-   [!] [/]<pattern>[/]
-
-Meaning:
-
-- ``!`` — Negate a rule (keep instead of delete).
-- ``/`` — Anchor a pattern to the top-level cleanup root.
-- Trailing ``/`` — Match directories only.
-- Lines starting with ``#`` — Comments, ignored.
-- Blank lines are skipped.
-
-Rules are applied in order; the **last matching rule wins**.
-
-Matching Semantics
-~~~~~~~~~~~~~~~~~~
-
-``clnup`` supports glob wildcards:
-
-- ``*`` matches zero or more characters.
-- ``?`` matches exactly one character.
-
-Example
-~~~~~~~
-
 .. code-block:: text
 
-   # Remove build directories and temporary files
-   build/
-   *.log
-   *~
+    clnup [-r] [-f <file>] [-q] [-v] [-d] [path]
 
-   # Keep cache directories
-   !/build/cache/
+    Options:
+      -r         Recurse into subdirectories
+      -f FILE    Specify rules file (default: .clnup)
+      -q         Quiet — suppress normal output
+      -v         Verbose — print extra logging
+      -d         Dry run — print matches, delete nothing
 
-Evaluation Rules
-----------------
+``path`` defaults to ``.`` (current directory).
 
-1. Directories are traversed recursively if ``-r`` is provided.
-2. Each file or directory is compared against all rules in order.
-3. The most recent match decides:
-   - Delete (default)
-   - Keep (if negated rule matched)
-4. When running in dry-run mode (``-d``), matched paths are printed instead of deleted.
-
-Verbose Output
---------------
-
-With ``-v``, ``clnup`` provides additional diagnostics:
-
-.. code-block:: text
-
-   [delete] build/logs
-   [skip]   build/cache/
-   [dry-run] build/tmp
-
-Quiet Mode
+Rules file
 ----------
 
-With ``-q``, output is suppressed except for errors—useful in scripts or cron jobs.
+Each line of ``.clnup`` is a pattern. Blank lines and lines starting with ``#`` are ignored.
+Rules are evaluated in order; the last matching rule wins (same semantics as ``.gitignore``).
 
-Examples
---------
+.. list-table::
+   :widths: 20 80
+   :header-rows: 1
 
-.. code-block:: bash
+   * - Syntax
+     - Meaning
+   * - ``*.o``
+     - Match any file or directory named ``*.o`` at any depth (non-anchored)
+   * - ``/build``
+     - Match only at the top level of the target path (anchored with leading ``/``)
+   * - ``target/``
+     - Match directories only (trailing ``/``)
+   * - ``!important.o``
+     - Negate — keep this entry even if an earlier rule would delete it
+   * - ``**``
+     - Not supported; use ``-r`` for recursive traversal
 
-   # non-recursive dry-run
-   clnup -d
+Glob patterns support ``*`` (any sequence of characters) and ``?`` (any single character).
 
-   # fully recursive delete
-   clnup -r
+Example ``.clnup``::
 
-   # use alternate rules file
-   clnup -f ~/.config/cleanup.rules -r -v
+    # Build artefacts
+    *.o
+    *.a
+    /build/
 
-Implementation
---------------
+    # Keep one specific object file
+    !main.o
 
-- Written in Zig using ``std.fs`` APIs.
-- Uses a simple recursive walker with ``deleteTree`` for directories.
-- Implements its own minimal ``fnmatch`` for ``*`` and ``?`` patterns.
-- Argument parsing supports short POSIX-style flags.
+    # Scratch directories only, not files
+    scratch/
+    tmp/
 
 Building
 --------
 
-.. code-block:: bash
+.. code-block:: sh
 
-   zig build-exe clnup.zig -O ReleaseSafe
+    zig build-exe clnup.zig -O ReleaseSafe
 
-or run directly with Zig:
+Examples
+--------
 
-.. code-block:: bash
+Dry-run, show what would be deleted recursively::
 
-   zig run clnup.zig -- -r -d
+    clnup -r -d
 
+Delete matched files in ``./dist``, quiet::
 
-License
--------
+    clnup -q dist
 
-MIT License.
-No external dependencies beyond Zig standard library.
+Use a custom rules file::
+
+    clnup -f .myclnup -r
+
+Implementation notes
+--------------------
+
+- Rule matching uses a hand-rolled ``fnmatch`` supporting ``*`` and ``?``.
+- Non-anchored rules are tested against every path-component suffix so ``*.o`` matches
+  ``a/b/foo.o`` in recursive mode.
+- Anchored rules (leading ``/``) are matched against the full relative path from the root.
+- Directory-only rules (trailing ``/``) are skipped for non-directory entries.
+- Symlinks are treated as directories for rule evaluation and recursion purposes.
+- When a matched directory is deleted the walk does not descend into it.
