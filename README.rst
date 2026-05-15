@@ -93,3 +93,8 @@ Implementation notes
 - Directory-only rules (trailing ``/``) are skipped for non-directory entries.
 - Symlinks are treated as directories for rule evaluation and recursion purposes.
 - When a matched directory is deleted the walk does not descend into it.
+
+
+License
+-------
+MIT
